@@ -190,12 +190,16 @@ def extract_product(html: str, source_url: str) -> dict:
     raise ValueError("No machine-readable Product/Offer price found")
 
 def identity_check(a: dict, b: dict) -> tuple[bool, str, float]:
-    for key in ("gtin", "sku", "mpn"):
+    for key in ("gtin","mpn"):
         if a.get(key) and b.get(key):
             if norm(a[key]) == norm(b[key]):
                 return True, f"matching_{key}", 1.0
             return False, f"conflicting_{key}", 0.0
-
+    cross_ids_a = {norm(v) for v in (a.get("gtin"), a.get("mpn"), a.get("sku")) if v}
+    cross_ids_b = {norm(v) for v in (b.get("gtin"), b.get("mpn"), b.get("sku")) if v}
+    common_ids = cross_ids_a & cross_ids_b
+    if common_ids:
+        return True, "matching_cross_identifier", 0.95
     sim = token_similarity(a.get("name", ""), b.get("name", ""))
     brand_ok = (not a.get("brand") or not b.get("brand") or norm(a["brand"]) == norm(b["brand"]))
     if sim >= 0.80 and brand_ok:
