@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import socket
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, HttpUrl
 
 APP_VERSION = "0.4"
@@ -300,9 +302,69 @@ def make_proof(before: dict, after: dict) -> dict:
     proof["proof_hash_sha256"] = hashlib.sha256(canonical).hexdigest()
     return proof
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 def root():
-    return {"service": "VALUE PROOF", "version": APP_VERSION, "status": "ready"}
+    payment_link = os.getenv("STRIPE_PAYMENT_LINK_URL", "").strip()
+    if payment_link.startswith("https://buy.stripe.com/"):
+        cta = f'<a class="cta" href="{payment_link}">Avvia la verifica · 9,90 €</a>'
+    else:
+        cta = '<span class="cta disabled" aria-disabled="true">Acquisto temporaneamente non disponibile</span>'
+
+    return HTMLResponse(f"""<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Confronta due offerte online e ottieni una verifica tecnica della differenza di prezzo osservata.">
+<title>Value Proof · Verifica il risparmio tra due offerte</title>
+<style>
+:root{{--ink:#13213a;--muted:#5f6b7d;--line:#dfe5ed;--accent:#5b3df5;--soft:#f5f3ff}}
+*{{box-sizing:border-box}} body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:#fbfcfe}}
+.wrap{{width:min(1080px,calc(100% - 36px));margin:auto}} header{{display:flex;align-items:center;justify-content:space-between;padding:24px 0}}
+.brand{{font-weight:850;font-size:22px;letter-spacing:-.4px}} .badge{{font-size:13px;color:#5037d5;background:var(--soft);border:1px solid #ded7ff;padding:7px 11px;border-radius:999px}}
+.hero{{padding:72px 0 54px;display:grid;grid-template-columns:1.25fr .75fr;gap:56px;align-items:center}}
+h1{{font-size:clamp(42px,7vw,72px);line-height:1.02;letter-spacing:-2.8px;margin:0 0 24px}} .lead{{font-size:20px;line-height:1.55;color:var(--muted);max-width:690px}}
+.cta{{display:inline-flex;justify-content:center;align-items:center;margin-top:20px;padding:16px 22px;border-radius:12px;background:var(--accent);color:#fff;text-decoration:none;font-weight:750;box-shadow:0 8px 24px rgba(91,61,245,.22)}}
+.cta.disabled{{background:#8a92a0;box-shadow:none;cursor:not-allowed}} .mini{{font-size:13px;color:var(--muted);margin-top:12px}}
+.proof{{background:#fff;border:1px solid var(--line);border-radius:22px;padding:25px;box-shadow:0 16px 55px rgba(25,42,70,.10)}}
+.proof h2{{margin:0 0 18px;font-size:20px}} .amount{{font-size:46px;font-weight:850;color:#20855b;margin:10px 0 22px}}
+.row{{display:flex;justify-content:space-between;gap:16px;padding:13px 0;border-top:1px solid #edf0f4;color:var(--muted)}} .row strong{{color:var(--ink)}}
+.section{{padding:58px 0;border-top:1px solid var(--line)}} .section h2{{font-size:34px;letter-spacing:-1px;margin:0 0 28px}}
+.grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}} .card{{background:#fff;border:1px solid var(--line);border-radius:16px;padding:22px}}
+.n{{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--accent);font-weight:800}} .card h3{{font-size:18px;margin:18px 0 8px}} .card p,.limits{{color:var(--muted);line-height:1.55}}
+.limits{{max-width:820px}} footer{{padding:32px 0 46px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}}
+@media(max-width:760px){{.hero{{grid-template-columns:1fr;padding-top:38px;gap:34px}}.grid{{grid-template-columns:1fr}}h1{{letter-spacing:-1.8px}}.cta{{width:100%}}}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><div class="brand">✓ Value Proof</div><div class="badge">Beta</div></header>
+<main>
+<section class="hero">
+<div>
+<h1>Il risparmio,<br>verificato.</h1>
+<p class="lead">Inserisci i link di due offerte pubbliche dello stesso prodotto. Value Proof legge i prezzi disponibili, controlla la comparabilità e calcola la differenza osservabile.</p>
+{cta}
+<p class="mini">Pagamento sicuro con Stripe. Il risultato viene mostrato al termine della verifica.</p>
+</div>
+<aside class="proof" aria-label="Esempio di risultato">
+<h2>Esempio di verifica</h2><div class="amount">240,00 €</div>
+<div class="row"><span>Offerta iniziale</span><strong>1.639,00 €</strong></div>
+<div class="row"><span>Offerta finale</span><strong>1.399,00 €</strong></div>
+<div class="row"><span>Esito</span><strong>Risparmio rilevato</strong></div>
+</aside>
+</section>
+<section class="section"><h2>Come funziona</h2><div class="grid">
+<div class="card"><div class="n">1</div><h3>Invia le offerte</h3><p>Durante il pagamento indichi il link dell'offerta iniziale e quello dell'offerta finale.</p></div>
+<div class="card"><div class="n">2</div><h3>Confronto tecnico</h3><p>Il sistema legge i dati pubblici e cerca prove che identifichino lo stesso prodotto.</p></div>
+<div class="card"><div class="n">3</div><h3>Risultato immediato</h3><p>Ricevi l'esito, i prezzi confrontati, il metodo di identificazione e un'impronta della prova.</p></div>
+</div></section>
+<section class="section"><h2>Cosa viene verificato</h2><p class="limits">Value Proof certifica una differenza monetaria osservabile tra due pagine pubbliche comparabili nel momento della verifica. Non garantisce disponibilità futura, costi non pubblicati, autenticità del venditore o causalità economica perfetta. Se le pagine non contengono dati sufficienti, il confronto può non essere conclusivo.</p></section>
+</main>
+<footer>Value Proof v{APP_VERSION} · Servizio sperimentale in beta</footer>
+</div>
+</body>
+</html>""")
 
 @app.get("/health")
 def health():
