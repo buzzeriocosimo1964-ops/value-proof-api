@@ -33,7 +33,53 @@ class CompareRequest(BaseModel):
 
 def money(v: Any) -> Decimal:
     try:
-        return Decimal(str(v).replace(",", ".")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if isinstance(v, bool) or v is None:
+            raise ValueError
+
+        # Numeric JSON values already use a locale-independent representation.
+        if isinstance(v, (int, float, Decimal)):
+            normalized = str(v)
+        else:
+            raw = re.sub(r"[\s\u00a0\u202f]+", "", str(v).strip())
+            if not raw:
+                raise ValueError
+
+            sign = ""
+            if raw[0] in "+-":
+                sign, raw = raw[0], raw[1:]
+            if not raw or not re.fullmatch(r"\d+(?:[.,]\d+)*", raw):
+                raise ValueError
+
+            if "," in raw and "." in raw:
+                # The rightmost separator is decimal; the other is thousands.
+                decimal_separator = "," if raw.rfind(",") > raw.rfind(".") else "."
+                thousands_separator = "." if decimal_separator == "," else ","
+                integer, fraction = raw.rsplit(decimal_separator, 1)
+                integer_groups = integer.split(thousands_separator)
+                if (
+                    not fraction
+                    or not integer_groups[0]
+                    or any(len(group) != 3 for group in integer_groups[1:])
+                ):
+                    raise ValueError
+                normalized = sign + "".join(integer_groups) + "." + fraction
+            elif "," in raw or "." in raw:
+                separator = "," if "," in raw else "."
+                parts = raw.split(separator)
+                if len(parts) == 2 and (len(parts[1]) != 3 or len(parts[0]) > 3):
+                    # A single separator that does not look like grouping is decimal.
+                    if not parts[1]:
+                        raise ValueError
+                    normalized = sign + parts[0] + "." + parts[1]
+                elif 1 <= len(parts[0]) <= 3 and all(part and len(part) == 3 for part in parts[1:]):
+                    # One or more groups of three digits are thousands separators.
+                    normalized = sign + "".join(parts)
+                else:
+                    raise ValueError
+            else:
+                normalized = sign + raw
+
+        return Decimal(normalized).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     except (InvalidOperation, ValueError, TypeError):
         raise ValueError(f"Invalid money value: {v!r}")
 
