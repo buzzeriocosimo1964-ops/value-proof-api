@@ -1,19 +1,28 @@
 import html
+import logging
 import os
+import re
 
 import httpx
-from fastapi import APIRouter, File, Form, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from preventivo_core import CHECKS, MAX_PDF_BYTES, analyze_quote_text, compare_quotes, extract_pdf_text
 
 
 router = APIRouter()
 STRIPE_API_BASE = "https://api.stripe.com/v1"
+logger = logging.getLogger("preventivo_check")
 
 
 def _safe(value: object) -> str:
     return html.escape(str(value or ""))
+
+
+def _source(value: str) -> str:
+    """Keep campaign labels useful in logs without accepting arbitrary text."""
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "", value or "direct")[:40]
+    return cleaned or "direct"
 
 
 async def _paid_session(session_id: str) -> dict:
@@ -52,15 +61,21 @@ def _layout(title: str, body: str) -> HTMLResponse:
 .formgrid{{display:grid;grid-template-columns:1fr 1fr;gap:18px}}label{{display:block;font-weight:750;margin-bottom:8px}}input[type=file]{{width:100%;padding:18px;border:1px dashed #aab4c2;border-radius:12px;background:#fff}}
 .metric{{font-size:36px;font-weight:850}}.muted{{color:var(--muted);line-height:1.5}}table{{width:100%;border-collapse:collapse}}td,th{{padding:12px;text-align:left;border-bottom:1px solid var(--line)}}
 .yes{{color:var(--good);font-weight:800}}.no{{color:#b42318;font-weight:800}}.notice{{padding:14px;background:#fff8e7;border-radius:10px;color:#684900;margin:18px 0}}
+.sample{{margin-top:56px}}.sample-grid{{display:grid;grid-template-columns:.75fr 1.25fr;gap:20px;align-items:start}}
+.score{{font-size:48px;font-weight:900;color:var(--good);margin:4px 0}}details{{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:10px 0}}
+summary{{cursor:pointer;font-weight:800}}details p{{margin:12px 0 0}}footer{{padding:30px 0 10px;color:var(--muted);font-size:13px;border-top:1px solid var(--line);margin-top:50px}}
 @media(max-width:720px){{.hero,.formgrid{{grid-template-columns:1fr}}h1{{letter-spacing:-1px}}.cta,button{{width:100%;justify-content:center}}}}
+@media(max-width:720px){{.sample-grid{{grid-template-columns:1fr}}}}
 </style></head><body><div class="wrap"><header>✓ PreventivoCheck <span class="pill">Beta</span></header><main>{body}</main></div></body></html>""")
 
 
 @router.get("/preventivo-check", response_class=HTMLResponse)
-def landing():
+def landing(src: str = Query("direct", max_length=80)):
+    campaign_source = _source(src)
+    logger.info("preventivo_check landing_view source=%s", campaign_source)
     payment_link = os.getenv("PREVENTIVO_CHECK_PAYMENT_LINK_URL", "").strip()
     cta = (
-        f'<a class="cta" href="{_safe(payment_link)}">Controlla i preventivi · 19,90 €</a>'
+        f'<a class="cta" href="/preventivo-check/buy?src={_safe(campaign_source)}">Controlla i preventivi · 19,90 €</a>'
         if payment_link.startswith("https://buy.stripe.com/")
         else '<span class="cta" style="opacity:.55">Apertura vendite a breve</span>'
     )
@@ -71,8 +86,31 @@ def landing():
 {cta}<p class="muted">Pagamento sicuro con Stripe · PDF non archiviati dopo l'analisi · In beta sono supportati PDF con testo selezionabile, non scansioni fotografiche</p></div>
 <aside class="card"><h2>Controllo immediato</h2><ul class="checks"><li>IVA e totale dichiarato</li><li>Materiali, quantità e unità</li><li>Sicurezza e smaltimento</li><li>Tempi, pagamenti e garanzie</li><li>Esclusioni e possibili extra</li></ul></aside></section>
 <section style="margin-top:56px"><h2>Cosa ricevi</h2><div class="formgrid"><div class="card"><h3>Indice di completezza</h3><p class="muted">Una lettura strutturata delle informazioni presenti e mancanti.</p></div><div class="card"><h3>Confronto voce per voce</h3><p class="muted">Le differenze importanti tra due offerte, oltre al semplice totale.</p></div></div></section>
+<section class="sample"><h2>Esempio del risultato</h2><div class="sample-grid"><div class="card"><span class="pill">Preventivo A</span><div class="score">63%</div><p class="muted">Indice di completezza rilevato nel documento.</p></div><div class="card"><table><tbody>
+<tr><th>Materiali e quantità</th><td class="yes">Presente</td></tr>
+<tr><th>IVA e aliquota</th><td class="yes">Presente</td></tr>
+<tr><th>Sicurezza e smaltimento</th><td class="no">Da chiarire</td></tr>
+<tr><th>Tempi e garanzie</th><td class="no">Da chiarire</td></tr>
+</tbody></table><p class="muted">Il rapporto evidenzia le informazioni da chiedere all'impresa prima di firmare.</p></div></div></section>
+<section style="margin-top:56px"><h2>Domande frequenti</h2>
+<details><summary>È una perizia tecnica?</summary><p class="muted">No. È un controllo informativo automatico del testo presente nel preventivo e non sostituisce un tecnico abilitato.</p></details>
+<details><summary>Posso confrontare due preventivi?</summary><p class="muted">Sì. Il primo PDF è obbligatorio; il secondo è facoltativo e permette il confronto diretto.</p></details>
+<details><summary>Funziona con fotografie o scansioni?</summary><p class="muted">In questa versione beta servono PDF con testo selezionabile. Le scansioni fotografiche non sono ancora supportate.</p></details>
+<details><summary>I documenti vengono conservati?</summary><p class="muted">No. I PDF vengono letti per produrre il risultato e non sono archiviati dal servizio.</p></details>
+<details><summary>Cosa significa “Da chiarire”?</summary><p class="muted">Significa che l'informazione non è stata trovata nel testo: non prova che il prezzo sia sbagliato, ma indica cosa chiedere prima della firma.</p></details>
+</section>
 <div class="notice">Strumento informativo: non sostituisce una perizia, un computo metrico o il parere di un tecnico abilitato.</div>
+<footer>Pagamento sicuro con Stripe · Servizio sperimentale in beta · Prezzo una tantum 19,90 €</footer>
 """)
+
+
+@router.get("/preventivo-check/buy")
+def buy(src: str = Query("direct", max_length=80)):
+    payment_link = os.getenv("PREVENTIVO_CHECK_PAYMENT_LINK_URL", "").strip()
+    if not payment_link.startswith("https://buy.stripe.com/"):
+        return RedirectResponse("/preventivo-check", status_code=303)
+    logger.info("preventivo_check checkout_click source=%s", _source(src))
+    return RedirectResponse(payment_link, status_code=303)
 
 
 @router.get("/preventivo-check/upload", response_class=HTMLResponse)
