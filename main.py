@@ -386,3 +386,6 @@ async def compare(req: CompareRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": str(e), "version": APP_VERSION})
 import checkout
+from preventivo_check import router as preventivo_check_router
+
+app.include_router(preventivo_check_router)
